@@ -156,6 +156,8 @@ void            uartputc_sync(int);
 int             uartgetc(void);
 
 // vm.c
+uint64          map_shared_pages(struct proc* src_proc, struct proc* dst_proc, uint64 src_va, uint64 size);
+uint64          unmap_shared_pages(struct proc* p, uint64 addr, uint64 size);
 void            kvminit(void);
 void            kvminithart(void);
 void            kvmmap(pagetable_t, uint64, uint64, uint64, int);

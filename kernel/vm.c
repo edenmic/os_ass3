@@ -4,7 +4,9 @@
 #include "elf.h"
 #include "riscv.h"
 #include "defs.h"
+#include "spinlock.h"
 #include "fs.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -440,44 +442,64 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 }
 
 uint64
-map_shared_pages(struct proc* src_proc, struct proc* dst_proc, uint64 src_va, uint64 size)
+map_shared_pages(struct proc* src_proc, struct proc* dst_proc, uint64 src_user_va, uint64 size)
 {
-  uint64 start_va = PGROUNDDOWN(src_va);
-  uint64 end_va = PGROUNDUP(src_va + size);
-  uint64 offset = src_va - start_va;  // Preserve offset within first page
-  uint64 num_pages = (end_va - start_va) / PGSIZE;
-  
-  // Allocate space in destination process at the end of its address space
-  uint64 dst_start = dst_proc->sz;
-  uint64 dst_va = dst_start + offset;
-  
-  for(uint64 a = start_va; a < end_va; a += PGSIZE) {
-    // Find the PTE for source virtual address
-    pte_t *pte = walk(src_proc->pagetable, a, 0);
-    if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0) {
-      // Invalid mapping, clean up and return error
-      uvmunmap(dst_proc->pagetable, dst_start, (a - start_va) / PGSIZE, 0);
-      return 0;
-    }
-    
-    // Get physical address and flags from source
-    uint64 pa = PTE2PA(*pte);
-    int flags = PTE_FLAGS(*pte) | PTE_S;  // Add shared flag
-    
-    // Map physical page into destination process
-    if(mappages(dst_proc->pagetable, dst_start, PGSIZE, pa, flags) != 0) {
-      // Failed to map, clean up and return error
-      uvmunmap(dst_proc->pagetable, dst_start, (a - start_va) / PGSIZE, 0);
-      return 0;
-    }
-    
-    dst_start += PGSIZE;
+  uint64 src_page_aligned_start_va = PGROUNDDOWN(src_user_va);
+  uint64 src_page_aligned_end_va = PGROUNDUP(src_user_va + size);
+  uint64 offset_in_first_page = src_user_va - src_page_aligned_start_va;
+  uint64 total_bytes_to_map_rounded = src_page_aligned_end_va - src_page_aligned_start_va;
+
+  if(size == 0 || total_bytes_to_map_rounded == 0) {
+    return 0;
   }
-  
-  // Update the size of the destination process
-  dst_proc->sz = dst_start;
-  
-  return dst_va;
+
+  // כתובת היעד למיפוי בתהליך היעד - בסוף מרחב הכתובות הנוכחי שלו
+  uint64 dst_mapping_start_va = PGROUNDUP(dst_proc->sz);
+  // הכתובת שתחזור למשתמש (עם ה-offset המקורי)
+  uint64 dst_va_returned_to_user = dst_mapping_start_va + offset_in_first_page;
+
+  // בדיקה אם יש מספיק מרחב כתובות וירטואלי בתהליך היעד
+  if (dst_mapping_start_va + total_bytes_to_map_rounded > MAXVA) { // MAXVA הוא הגבול העליון למרחב וירטואלי
+      return 0; 
+  }
+
+  uint64 current_src_va = src_page_aligned_start_va;
+  uint64 current_dst_va_for_mapping = dst_mapping_start_va;
+
+  // לולאה למיפוי כל דף ודף
+  for(; current_src_va < src_page_aligned_end_va; current_src_va += PGSIZE, current_dst_va_for_mapping += PGSIZE){
+    pte_t *src_pte = walk(src_proc->pagetable, current_src_va, 0);
+
+    // ודא שהדף במקור תקין, קיים, ונגיש למשתמש
+    if(src_pte == 0 || (*src_pte & PTE_V) == 0 || (*src_pte & PTE_U) == 0){
+      // אם יש כשל, בטל מיפויים שכבר בוצעו בלולאה זו בתהליך היעד
+      if(current_dst_va_for_mapping > dst_mapping_start_va) {
+         uvmunmap(dst_proc->pagetable, dst_mapping_start_va, (current_dst_va_for_mapping - dst_mapping_start_va) / PGSIZE, 0);
+      }
+      return 0; // החזר כישלון
+    }
+
+    uint64 phys_addr_to_map = PTE2PA(*src_pte); // קבל כתובת פיזית מהמקור
+    // ודא שהכתובת הפיזית שהתקבלה תקינה (לא שלילית, בטווח הגיוני) - הוסף כאן בדיקה אם יש צורך.
+    // לדוגמה, אם PTE2PA יכול להחזיר ערך מיוחד לשגיאה.
+
+    int dst_pte_flags = PTE_FLAGS(*src_pte) | PTE_S; // ירושה של הרשאות מהמקור + הוספת דגל משותף
+
+    // בצע את המיפוי בתהליך היעד
+    if(mappages(dst_proc->pagetable, current_dst_va_for_mapping, PGSIZE, phys_addr_to_map, dst_pte_flags) != 0){
+      // אם המיפוי נכשל, בטל מיפויים שכבר בוצעו
+      if(current_dst_va_for_mapping > dst_mapping_start_va) {
+        uvmunmap(dst_proc->pagetable, dst_mapping_start_va, (current_dst_va_for_mapping - dst_mapping_start_va) / PGSIZE, 0);
+      }
+      return 0; // החזר כישלון
+    }
+  }
+
+  // אם כל המיפויים הצליחו, עדכן את גודל תהליך היעד (dst_proc->sz)
+  // זהו השלב הקריטי שסביר שלא עבד נכון בגלל זיהוי שגוי של dst_proc קודם לכן.
+  dst_proc->sz = dst_mapping_start_va + total_bytes_to_map_rounded;
+
+  return dst_va_returned_to_user; // החזר את הכתובת הרלוונטית למשתמש בתהליך היעד
 }
 
 uint64

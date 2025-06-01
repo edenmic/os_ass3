@@ -38,5 +38,3 @@ entry("sleep");
 entry("uptime");
 entry("map_shared_pages");
 entry("unmap_shared_pages");
-entry("map_shared_pages(int pid, void *addr, uint size)");
-entry("unmap_shared_pages(void *addr, uint size)");
