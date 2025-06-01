@@ -89,3 +89,52 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64
+sys_map_shared_pages(void)
+{
+  int pid;
+  uint64 addr;
+  int size;
+  struct proc *p;
+  struct proc *dst_proc = 0;
+  
+  if(argint(0, &pid) < 0 || argaddr(1, &addr) < 0 || argint(2, &size) < 0)
+    return 0;
+  
+  // Find the destination process
+  p = myproc();
+  
+  acquire(&p->lock);
+  struct proc *src_proc = p;
+  release(&p->lock);
+  
+  // Search for destination process
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->pid == pid && p->state != UNUSED) {
+      dst_proc = p;
+      release(&p->lock);
+      break;
+    }
+    release(&p->lock);
+  }
+  
+  if(dst_proc == 0)
+    return 0;  // Process not found
+  
+  return map_shared_pages(src_proc, dst_proc, addr, size);
+}
+
+uint64
+sys_unmap_shared_pages(void)
+{
+  uint64 addr;
+  int size;
+  
+  if(argaddr(0, &addr) < 0 || argint(1, &size) < 0)
+    return -1;
+  
+  struct proc *p = myproc();
+  return unmap_shared_pages(p, addr, size);
+}
