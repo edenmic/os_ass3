@@ -1,10 +1,9 @@
 #include "kernel/types.h"
 #include "kernel/stat.h"
 #include "user/user.h"
-//#include <stdio.h>
 
 #define BUFFER_SIZE 4096  // One page size
-#define NUM_CHILDREN 4    // Number of child processes
+#define NUM_CHILDREN 16    // Number of child processes
 #define MAX_MSG_LEN 100   // Maximum message length
 
 // Define log message header structure
@@ -69,7 +68,7 @@ int main(int argc, char *argv[]) {
       print_size("Child after mapping", getpid());
       
       // Generate log messages - more for the last child to ensure buffer overflow testing
-      int num_messages = (i == NUM_CHILDREN-1) ? 30 : 10;
+      int num_messages = (i == NUM_CHILDREN-1) ? 1000 : 10;
       
       // Access shared memory
       char *shared_buf = (char*)shared_addr_child;
