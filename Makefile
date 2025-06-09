@@ -133,7 +133,7 @@ UPROGS=\
     $U/_wc\
     $U/_zombie\
     $U/_shmem_test\
-    $U/_shmem_test2\
+    $U/_shmem_test_extra\
     $U/_log_test\
 
 

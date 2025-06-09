@@ -24,89 +24,80 @@ int main(int argc, char *argv[])
   
   int parent_pid = getpid();
   print_size("Parent before fork", parent_pid);
-
-  int children[4]; // Array to store child PIDs
-  int child_count = 0;
-
-  // Create 4 children
-  for(int i = 0; i < 4; i++) {
-    int child_pid = fork();
+  
+  int child_pid = fork();
+  if(child_pid < 0) {
+    printf("fork failed\n");
+    exit(1);
+  }
+  
+  if(child_pid == 0) {
+    // Child process
+    sleep(2); // Give parent time to print first
+    print_size("Child before mapping", getpid());
     
-    if(child_pid < 0) {
-      printf("fork failed at child %d\n", i);
+    // Map shared memory from parent
+    // We pass parent_pid, the virtual address in parent (buf_parent), and size
+    uint64 shared_addr_child = (uint64)map_shared_pages(parent_pid, buf_parent, 4096);
+    
+    // // Print the address returned by map_shared_pages for debugging
+    // printf("Child: map_shared_pages returned: 0x%x\n", shared_addr_child);
+
+    if(shared_addr_child == 0) { // Assuming 0 is error/failure
+      printf("Child: map_shared_pages failed\n");
       exit(1);
     }
     
-    if(child_pid == 0) {
-      // Child process (with identifier i)
-      printf("Child %d (pid %d): started\n", i, getpid());
-      print_size("Child before mapping", getpid());
-      
-      // Map shared memory from parent
-      uint64 shared_addr_child = (uint64)map_shared_pages(parent_pid, buf_parent, 4096);
-      
-      printf("Child %d: map_shared_pages returned: 0x%x\n", i, shared_addr_child);
+    print_size("Child after mapping", getpid());
+    
+    char *shared_buf_child = (char*)shared_addr_child;
+    printf("Child: attempting to read from shared memory at 0x%x\n", shared_buf_child);
+    printf("Child: shared memory initially contains: '%s'\n", shared_buf_child); // First access (read)
+    
+    strcpy(shared_buf_child, "Hello daddy"); // Second access (write)
+    printf("Child: wrote 'Hello daddy' to shared memory\n");
 
-      if(shared_addr_child == 0) {
-        printf("Child %d: map_shared_pages failed\n", i);
+    //for debug
+    // printf("Child: shared memory address = 0x%x\n", shared_addr_child);
+    // for(int i = 0; i < 10; i++) {
+    //   printf("Child: byte at offset %d = %d\n", i, shared_buf_child[i]);
+    // }
+    
+    if(!disable_unmap) {
+      printf("Child: attempting to unmap shared memory at 0x%x\n", shared_buf_child);
+      if(unmap_shared_pages((void*)shared_addr_child, 4096) != 0) {
+        printf("Child: unmap_shared_pages failed\n");
         exit(1);
       }
+      print_size("Child after unmapping", getpid());
       
-      print_size("Child after mapping", getpid());
-      
-      char *shared_buf_child = (char*)shared_addr_child;
-      printf("Child %d: reading from shared memory at 0x%x\n", i, shared_buf_child);
-      printf("Child %d: shared memory contains: '%s'\n", i, shared_buf_child);
-      
-      // Each child writes a different message
-      char message[32];
-      strcpy(message, "Hello from child ");
-      message[16] = '0' + i;  // Convert i to a character
-      message[17] = '\0';     // Null-terminate the string
-      strcpy(shared_buf_child, message);
-      printf("Child %d: wrote '%s' to shared memory\n", i, message);
-      
-      // Have each child sleep for a different time to demonstrate they're running in parallel
-      sleep(i * 10);
-      
-      if(!disable_unmap) {
-        printf("Child %d: unmapping shared memory\n", i);
-        if(unmap_shared_pages((void*)shared_addr_child, 4096) != 0) {
-          printf("Child %d: unmap_shared_pages failed\n", i);
-          exit(1);
-        }
-        
-        print_size("Child after unmapping", getpid());
-      } else {
-        printf("Child %d: skipping unmap as requested\n", i);
+      char *new_buf_child = malloc(2048);
+      if(new_buf_child == 0){
+        printf("Child: malloc after unmap failed\n");
+        exit(1);
       }
-      
-      exit(i); // Exit with child number as status
+      strcpy(new_buf_child, "New child buffer works");
+      print_size("Child after malloc", getpid());
+      printf("Child: wrote to new buffer: '%s'\n", new_buf_child);
+      free(new_buf_child);
     } else {
-      // Parent process - remember child pid
-      children[child_count++] = child_pid;
-      printf("Parent: created child %d (pid %d)\n", i, child_pid);
-    }
-  }
-
-  // Parent waits for all children
-  if(child_count > 0) {
-    printf("Parent: waiting for %d children to finish...\n", child_count);
-    
-    // Use explicit array indexes when waiting for children
-    for(int i = 0; i < child_count; i++) {
-      int status;
-      int child_pid = wait(&status);
-      printf("Parent: child with pid %d (original child[%d]=%d) finished with status %d\n", 
-             child_pid, i, children[i], status);
+      printf("Child: skipping unmap as requested\n");
     }
     
-    printf("Parent: all children finished. Accessing shared memory...\n");
-    printf("Parent: shared memory final content: '%s'\n", buf_parent);
+    exit(0);
+  } else {
+    // Parent process
+    // Wait for child to complete its operations BEFORE accessing shared memory
+    // The sleep(10) was a workaround; wait() is more robust.
+    printf("Parent: waiting for child (pid %d) to finish...\n", child_pid);
+    wait(0); 
+    
+    printf("Parent: child finished. Accessing shared memory...\n");
+    printf("Parent: shared memory now contains: '%s'\n", buf_parent); // buf_parent is in parent's address space
     
     free(buf_parent);
-    print_size("Parent after all children exit and free", getpid());
+    print_size("Parent after child exit and free", getpid());
+    
+    exit(0);
   }
-
-  return 0;
 }

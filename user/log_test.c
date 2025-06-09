@@ -52,20 +52,20 @@ int main(int argc, char *argv[]) {
     
     if(pid == 0) {
       // Child process
-      print_size("Child before mapping", getpid());
+      // print_size("Child before mapping", getpid());  // Comment out
       
       // Map shared memory from parent
       uint64 shared_addr_child = (uint64)map_shared_pages(parent_pid, buf_parent, BUFFER_SIZE);
       
       // Print the address returned by map_shared_pages
-      printf("Child %d: map_shared_pages returned: 0x%x\n", i, shared_addr_child);
+      // printf("Child %d: map_shared_pages returned: 0x%x\n", i, shared_addr_child);  // Comment out
       
       if(shared_addr_child == 0) {
-        printf("Child %d: map_shared_pages failed\n", i);
+        // printf("Child %d: map_shared_pages failed\n", i);  // Comment out
         exit(1);
       }
       
-      print_size("Child after mapping", getpid());
+      // print_size("Child after mapping", getpid());  // Comment out
       
       // Generate log messages - more for the last child to ensure buffer overflow testing
       int num_messages = (i == NUM_CHILDREN-1) ? 1000 : 10;
@@ -78,7 +78,7 @@ int main(int argc, char *argv[]) {
       for(int msg = 0; msg < num_messages; msg++) {
         // Skip if we're near the end of buffer
         if(write_pos + sizeof(LogHeader) + MAX_MSG_LEN >= BUFFER_SIZE) {
-          printf("Child %d: buffer full, stopping\n", i);
+          // printf("Child %d: buffer full, stopping\n", i);  // Comment out
           break;
         }
         
@@ -140,7 +140,7 @@ int main(int argc, char *argv[]) {
         int attempts = 0;
         int success = 0;
         
-        while(!success && attempts < 100) {  // Limit attempts to avoid infinite loops
+        while(!success && attempts < 100) {
           // Check if position is aligned
           if(write_pos % 4 != 0) {
             write_pos = next_aligned_addr(write_pos);
@@ -148,7 +148,7 @@ int main(int argc, char *argv[]) {
           
           // Skip if we're near the end of buffer
           if(write_pos + sizeof(LogHeader) + len >= BUFFER_SIZE) {
-            printf("Child %d: reached end of buffer\n", i);
+            // printf("Child %d: reached end of buffer\n", i);  // Comment out
             break;
           }
           
@@ -175,11 +175,11 @@ int main(int argc, char *argv[]) {
           attempts++;
         }
         
-        // Small delay to allow other processes to write
-        sleep(1);
+        // Remove the sleep to speed up execution
+        // sleep(1);  // Comment out
       }
       
-      printf("Child %d: finished writing messages\n", i);
+      // printf("Child %d: finished writing messages\n", i);  // Comment out
       exit(0);
     } else {
       // Parent process - store child PID
