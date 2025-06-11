@@ -101,7 +101,7 @@ sys_map_shared_pages(void)
   struct proc *identified_source_process = 0;
   struct proc *destination_process = myproc(); // התהליך שקורא לקריאת המערכת הוא היעד
 
-// קבלת ארגומנטים ממרחב המשתמש - קריאות void
+  // קבלת ארגומנטים ממרחב המשתמש
   argint(0, &source_pid_from_arg);
   argaddr(1, &src_va_from_arg);
   argint(2, &size_from_arg);
@@ -113,38 +113,53 @@ sys_map_shared_pages(void)
 
   // חיפוש תהליך המקור לפי ה-PID שהתקבל
   for(p_iterator = proc; p_iterator < &proc[NPROC]; p_iterator++) {
-    // יש לטפל בנעילות בזהירות כאן.
-    // נעילה קצרה לבדיקת PID ומצב, שחרור אם לא רלוונטי.
-    // אם נמצא, ייתכן שנרצה להשאיר נעול או לטפל בבטיחות גישה לטבלת הדפים שלו.
-    // לשם הפשטות של xv6, לרוב משחררים את הנעילה ומקווים לטוב,
-    // או שפונקציית הליבה הפנימית (map_shared_pages) מודעת לכך.
     acquire(&p_iterator->lock);
     if(p_iterator->pid == source_pid_from_arg) {
-      if(p_iterator->state != UNUSED && p_iterator->state != ZOMBIE) { // ודא שהמקור במצב תקין
+      if(p_iterator->state != UNUSED && p_iterator->state != ZOMBIE) {
         identified_source_process = p_iterator;
-        // כאן, אם map_shared_pages לא נועלת את המקור, כדאי לשחרר את הנעילה
-        // רק לאחר ש-map_shared_pages סיימה, או להעתיק את המידע הדרוש תחת נעילה.
-        // לצורך המטלה, נשחרר כאן ונניח שזה מספיק פשוט.
-        // עם זאת, במימוש אמיתי, יש כאן פוטנציאל ל-race condition.
+        // לא משחררים את הנעילה כאן - נשמור אותה עד לסוף הפעולה!
+        break;
       }
-      release(&p_iterator->lock); // שחרר את הנעילה של התהליך שנבדק
-      if (identified_source_process) // אם מצאנו את התהליך התקין, הפסק לחפש
-          break;
-    } else {
-      release(&p_iterator->lock); // לא התהליך הזה, שחרר את הנעילה שלו
     }
+    release(&p_iterator->lock);
   }
 
   if(identified_source_process == 0) {
     return 0; // תהליך המקור לא נמצא או לא במצב תקין
   }
+  // נעילה בטוחה של שני התהליכים למניעת deadlock
+  int need_dest_lock = (identified_source_process != destination_process);
+  
+  if(need_dest_lock) {
+    // נעילה בסדר קבוע לפי כתובת זיכרון למניעת deadlock
+    if(identified_source_process < destination_process) {
+      // identified_source_process כבר נעול, רק ננעל את destination
+      acquire(&destination_process->lock);
+    } else {
+      // צריך לשחרר ולנעול מחדש בסדר הנכון
+      release(&identified_source_process->lock);
+      acquire(&destination_process->lock);
+      acquire(&identified_source_process->lock);
+    }
+  }
 
-  // ודא שתהליך המקור והיעד אינם זהים, אם זו דרישה
-  // if (identified_source_process == destination_process) { return 0; }
+  // כעת שני התהליכים נעולים בבטחה - בצע את המיפוי
+  uint64 result = map_shared_pages(identified_source_process, destination_process, src_va_from_arg, (uint64)size_from_arg);
 
+  // שחרר נעילות בסדר הפוך
+  if(need_dest_lock) {
+    if(identified_source_process < destination_process) {
+      release(&destination_process->lock);
+      release(&identified_source_process->lock);
+    } else {
+      release(&identified_source_process->lock);
+      release(&destination_process->lock);
+    }
+  } else {
+    release(&identified_source_process->lock);
+  }
 
-  // קריאה לפונקציית הליבה עם הזיהוי הנכון של מקור ויעד
-  return map_shared_pages(identified_source_process, destination_process, src_va_from_arg, (uint64)size_from_arg);
+  return result;
 }
 
 uint64
@@ -162,7 +177,14 @@ sys_unmap_shared_pages(void)
   
   struct proc *p = myproc();
   
+  // נעילת התהליך לפני גישה לשדות שלו (דרישה חובה מההבהרה)
+  acquire(&p->lock);
+  
   // Add external declaration for unmap_shared_pages
   extern uint64 unmap_shared_pages(struct proc*, uint64, uint64);
-  return unmap_shared_pages(p, addr, size);
+  uint64 result = unmap_shared_pages(p, addr, size);
+  
+  release(&p->lock);
+  
+  return result;
 }

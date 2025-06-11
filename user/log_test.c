@@ -13,6 +13,9 @@ typedef struct {
   uint16 msg_length;
 } __attribute__((packed)) LogHeader;
 
+// Global flag to signal when all children are done
+volatile int all_children_done = 0;
+
 // Helper function to advance to next aligned header position
 uint64 next_aligned_addr(uint64 addr) {
   return (addr + 3) & ~3;  // Align to 4-byte boundary
